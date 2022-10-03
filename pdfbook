@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+#
+# © Reuben Thomas <rrt@sc3d.org> 2022
+# Released under the GPL version 3, or (at your option) any later version.
+
+# FIXME: use temporary directory for intermediate files, with option to keep
+# them for debugging.
+
+import os
+import argparse
+import re
+import subprocess
+
+# Set up units
+from units import unit, scaled_unit
+import units.predefined
+units.predefined.define_base_si_units()
+inch = scaled_unit('inch', 'cm', 2.54)
+mm = unit('mm')
+point = scaled_unit('pt', 'inch', 1/72)
+units = {
+    'pt': point,
+    'mm': mm,
+    'inch': inch,
+}
+
+def unit_to_str(u):
+    return f'{u.num}{u.unit}'
+
+# Command-line arguments
+default_paper = subprocess.check_output(['paper', '--no-size']).decode().strip()
+parser = argparse.ArgumentParser(
+    description='Make a print-ready PDF of signatures from PDF of individual pages. The resulting file should be printed in "long-edge" duplex mode.',
+)
+parser.add_argument('-V', '--version', action='version',
+                    version='%(prog)s 0.1 (01 Oct 2022) by Reuben Thomas <rrt@sc3d.org>')
+parser.add_argument('-p', '--paper', metavar='PAPER-SIZE', default=default_paper,
+                    help='output paper size [default is user default paper size, currently %(default)s]')
+parser.add_argument('-s', '--signature', metavar='PAGES', type=int, default=0,
+                    help='number of pages per signature [default %(default)s = all pages in one signature]')
+parser.add_argument('input_file', metavar='INPUT',
+                    help="input PDF file name")
+parser.add_argument('input_page_width', metavar='INPUT-PAGE-WIDTH',
+                    help="input page width in pt, mm or in")
+parser.add_argument('output_file', metavar='OUTPUT',
+                    help="output PDF file name")
+args = parser.parse_args()
+
+# Get output paper size
+output_paper = args.paper
+paper_info = subprocess.check_output(['paper', output_paper])
+
+# Extract height, width and unit
+matches = re.search(b': ([0-9]+)x([0-9]+) ([a-z]+)', paper_info)
+paper_unit = units[matches.group(3).decode()]
+paper_width = paper_unit(int(matches.group(1)))
+paper_height = paper_unit(int(matches.group(2)))
+
+# Calculate page width and height
+page_width = paper_unit(paper_height) / 2
+page_height = paper_unit(paper_width)
+
+# Extract input page width
+matches = re.search('([0-9]+)([a-z]+)', args.input_page_width)
+input_page_width = units[matches.group(2)](int(matches.group(1)))
+
+# Convert PDF file to PostScript
+subprocess.check_call(['pdf2ps', args.input_file])
+
+# Get base name of input file
+(input_base, _) = os.path.splitext(args.input_file)
+
+# Shift even pages by paper width — page width
+even_page_shift = page_width - input_page_width
+subprocess.check_call(['pstops', f'--inpaper={unit_to_str(page_width)}x{unit_to_str(page_height)}', f'2:0,1({unit_to_str(even_page_shift)},0mm)', f'{input_base}.ps', f'{input_base}-shifted.ps'])
+
+# Reorder pages into signature orders
+subprocess.check_call(['psbook', f'-s{args.signature}', f'{input_base}-shifted.ps', f'{input_base}-shifted-book.ps'])
+
+# Put two pages on each sheet
+subprocess.check_call(['psnup', f'--paper={output_paper}', f'--inpaper={unit_to_str(page_width)}x{unit_to_str(page_height)}', '-2', f'{input_base}-shifted-book.ps', f'{input_base}-shifted-book-2up.ps'])
+
+# Rotate every other page upside-down for long-edge duplex printing
+# Note: recto and verso pages look unaligned in PostScript (by about 0.5pt;
+# combined height of original pages is 842pt, or 1pt different, but not
+# exactly sure how the error is obtained); BUT the alignment is restored by
+# conversion back to PDF.
+# mm adjustments in next line are for printer; FIXME: add options to script for this
+subprocess.check_call(['pstops', f'--paper={output_paper}', '2:0(0mm,0mm),1U(1w,1h)', f'{input_base}-shifted-book-2up.ps', f'{input_base}-shifted-book-2up-duplex.ps'])
+
+# Convert back to PDF
+subprocess.check_call(['ps2pdf', '-dAutoRotatePages=/None', f'{input_base}-shifted-book-2up-duplex.ps', args.output_file])
