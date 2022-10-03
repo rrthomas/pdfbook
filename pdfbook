@@ -10,6 +10,7 @@ import os
 import argparse
 import re
 import subprocess
+import logging
 
 # Set up units
 from units import unit, scaled_unit
@@ -30,21 +31,32 @@ def unit_to_str(u):
 # Command-line arguments
 default_paper = subprocess.check_output(['paper', '--no-size']).decode().strip()
 parser = argparse.ArgumentParser(
-    description='Make a print-ready PDF of signatures from PDF of individual pages. The resulting file should be printed in "long-edge" duplex mode.',
+    description='Make a print-ready PDF of signatures from PDF of individual pages. The resulting file should be printed in "long-edge" duplex mode. Dimensions are in pt, mm or in, and the unit must be given, e.g. "14pt".',
 )
 parser.add_argument('-V', '--version', action='version',
-                    version='%(prog)s 0.1 (01 Oct 2022) by Reuben Thomas <rrt@sc3d.org>')
+                    version='%(prog)s 0.2 (03 Oct 2022) by Reuben Thomas <rrt@sc3d.org>')
 parser.add_argument('-p', '--paper', metavar='PAPER-SIZE', default=default_paper,
                     help='output paper size [default is user default paper size, currently %(default)s]')
 parser.add_argument('-s', '--signature', metavar='PAGES', type=int, default=0,
                     help='number of pages per signature [default %(default)s = all pages in one signature]')
+parser.add_argument('--verso-w-offset', metavar='DIMENSION', default='0pt',
+                    help='width offset for verso pages [default %(default)s]')
+parser.add_argument('--verso-h-offset', metavar='DIMENSION', default='0pt',
+                    help='height offset for verso pages [default %(default)s]')
 parser.add_argument('input_file', metavar='INPUT',
                     help="input PDF file name")
 parser.add_argument('input_page_width', metavar='INPUT-PAGE-WIDTH',
-                    help="input page width in pt, mm or in")
+                    help="input page width")
 parser.add_argument('output_file', metavar='OUTPUT',
                     help="output PDF file name")
 args = parser.parse_args()
+
+# Error messages
+# FIXME: Use warnings, not logging
+logging.basicConfig(format=f'{parser.prog}: %(message)s')
+logger = logging.getLogger(__name__)
+def warn(s): logger.warning(s)
+def die(s): warn(s); exit(1)
 
 # Get output paper size
 output_paper = args.paper
@@ -60,9 +72,18 @@ paper_height = paper_unit(int(matches.group(2)))
 page_width = paper_unit(paper_height) / 2
 page_height = paper_unit(paper_width)
 
-# Extract input page width
-matches = re.search('([0-9]+)([a-z]+)', args.input_page_width)
-input_page_width = units[matches.group(2)](int(matches.group(1)))
+# Get dimensions
+def str_to_dimension(s):
+    matches = re.search('([0-9]+)([a-z]+)', s)
+    return units[matches.group(2)](int(matches.group(1)))
+
+input_page_width = str_to_dimension(args.input_page_width)
+verso_w_offset = str_to_dimension(args.verso_w_offset)
+verso_h_offset = str_to_dimension(args.verso_h_offset)
+
+# Check input file exists
+if not os.path.exists(args.input_file):
+    die(f'input file `{args.input_file}\' does not exist')
 
 # Convert PDF file to PostScript
 subprocess.check_call(['pdf2ps', args.input_file])
@@ -85,8 +106,7 @@ subprocess.check_call(['psnup', f'--paper={output_paper}', f'--inpaper={unit_to_
 # combined height of original pages is 842pt, or 1pt different, but not
 # exactly sure how the error is obtained); BUT the alignment is restored by
 # conversion back to PDF.
-# mm adjustments in next line are for printer; FIXME: add options to script for this
-subprocess.check_call(['pstops', f'--paper={output_paper}', '2:0(0mm,0mm),1U(1w,1h)', f'{input_base}-shifted-book-2up.ps', f'{input_base}-shifted-book-2up-duplex.ps'])
+subprocess.check_call(['pstops', f'--paper={output_paper}', f'2:0({unit_to_str(verso_w_offset)},{unit_to_str(verso_h_offset)}),1U(1w,1h)', f'{input_base}-shifted-book-2up.ps', f'{input_base}-shifted-book-2up-duplex.ps'])
 
 # Convert back to PDF
 subprocess.check_call(['ps2pdf', '-dAutoRotatePages=/None', f'{input_base}-shifted-book-2up-duplex.ps', args.output_file])
