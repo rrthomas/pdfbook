@@ -31,7 +31,7 @@ def unit_to_str(u):
 # Command-line arguments
 default_paper = subprocess.check_output(['paper', '--no-size']).decode().strip()
 parser = argparse.ArgumentParser(
-    description='Make a print-ready PDF of signatures from PDF of individual pages. The resulting file should be printed in "long-edge" duplex mode. Dimensions are in pt, mm or in, and the unit must be given, e.g. "14pt".',
+    description='Make a print-ready PDF of signatures from PDF of individual pages. The resulting file should be printed in "long-edge" duplex mode, unless --short-edge is given. Dimensions are in pt, mm or in, and the unit must be given, e.g. "14pt".',
 )
 parser.add_argument('-V', '--version', action='version',
                     version='%(prog)s 0.2 (03 Oct 2022) by Reuben Thomas <rrt@sc3d.org>')
@@ -39,6 +39,8 @@ parser.add_argument('-p', '--paper', metavar='PAPER-SIZE', default=default_paper
                     help='output paper size [default is user default paper size, currently %(default)s]')
 parser.add_argument('-s', '--signature', metavar='PAGES', type=int, default=0,
                     help='number of pages per signature [default %(default)s = all pages in one signature]')
+parser.add_argument('--short-edge', action='store_true',
+                  help='make the output suitable for short-edge duplex printing [default: long-edge]')
 parser.add_argument('--verso-w-offset', metavar='DIMENSION', default='0pt',
                     help='width offset for verso pages [default %(default)s]')
 parser.add_argument('--verso-h-offset', metavar='DIMENSION', default='0pt',
@@ -102,11 +104,13 @@ subprocess.check_call(['psbook', f'-s{args.signature}', f'{input_base}-shifted.p
 subprocess.check_call(['psnup', f'--paper={output_paper}', f'--inpaper={unit_to_str(page_width)}x{unit_to_str(page_height)}', '-2', f'{input_base}-shifted-book.ps', f'{input_base}-shifted-book-2up.ps'])
 
 # Rotate every other page upside-down for long-edge duplex printing
-# Note: recto and verso pages look unaligned in PostScript (by about 0.5pt;
-# combined height of original pages is 842pt, or 1pt different, but not
-# exactly sure how the error is obtained); BUT the alignment is restored by
-# conversion back to PDF.
-subprocess.check_call(['pstops', f'--paper={output_paper}', f'2:0({unit_to_str(verso_w_offset)},{unit_to_str(verso_h_offset)}),1U(1w,1h)', f'{input_base}-shifted-book-2up.ps', f'{input_base}-shifted-book-2up-duplex.ps'])
+# Note: recto and verso pages look unaligned in PostScript (by about 0.5pt);
+# BUT the alignment is restored by conversion back to PDF.
+if args.short_edge:
+    verso_rotation = '(0,0)'
+else:
+    verso_rotation = 'U(1w,1h)'
+subprocess.check_call(['pstops', f'--paper={output_paper}', f'2:0({unit_to_str(verso_w_offset)},{unit_to_str(verso_h_offset)}),1{verso_rotation}', f'{input_base}-shifted-book-2up.ps', f'{input_base}-shifted-book-2up-duplex.ps'])
 
 # Convert back to PDF
 subprocess.check_call(['ps2pdf', '-dAutoRotatePages=/None', f'{input_base}-shifted-book-2up-duplex.ps', args.output_file])
