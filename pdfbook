@@ -3,14 +3,13 @@
 # © Reuben Thomas <rrt@sc3d.org> 2022
 # Released under the GPL version 3, or (at your option) any later version.
 
-# FIXME: use temporary directory for intermediate files, with option to keep
-# them for debugging.
-
 import os
 import argparse
 import re
 import subprocess
 import logging
+import tempfile
+import shutil
 
 # Set up units
 from units import unit, scaled_unit
@@ -45,6 +44,8 @@ parser.add_argument('--verso-w-offset', metavar='DIMENSION', default='0pt',
                     help='width offset for verso pages [default %(default)s]')
 parser.add_argument('--verso-h-offset', metavar='DIMENSION', default='0pt',
                     help='height offset for verso pages [default %(default)s]')
+parser.add_argument('--debug', action='store_true',
+                    help='print command run and keep temporary files')
 parser.add_argument('input_file', metavar='INPUT',
                     help="input PDF file name")
 parser.add_argument('input_page_width', metavar='INPUT-PAGE-WIDTH',
@@ -59,6 +60,11 @@ logging.basicConfig(format=f'{parser.prog}: %(message)s')
 logger = logging.getLogger(__name__)
 def warn(s): logger.warning(s)
 def die(s): warn(s); exit(1)
+
+def run(cmd):
+    if args.debug:
+        warn(f'running command: {" ".join(cmd)}')
+    subprocess.check_call(cmd)
 
 # Get output paper size
 output_paper = args.paper
@@ -87,21 +93,46 @@ verso_h_offset = str_to_dimension(args.verso_h_offset)
 if not os.path.exists(args.input_file):
     die(f'input file `{args.input_file}\' does not exist')
 
-# Convert PDF file to PostScript
-subprocess.check_call(['pdf2ps', args.input_file])
+# Create temporary directory
+# We don't use tempfile.TemporaryDirectory so we can avoid deleting it if
+# --debug is given.
+tempdir = tempfile.mkdtemp()
 
-# Get base name of input file
+# Get base name of input file, and make names of temporary files
 (input_base, _) = os.path.splitext(args.input_file)
+ps_file = os.path.join(tempdir, f'{input_base}.ps')
+shifted_ps_file = os.path.join(tempdir, f'{input_base}-shifted.ps')
+shifted_ps_signatures_file = os.path.join(tempdir, f'{input_base}-shifted-book.ps')
+shifted_ps_signatures_2up_file = os.path.join(tempdir, f'{input_base}-shifted-book-2up.ps')
+shifted_ps_signatures_duplex_file = os.path.join(tempdir ,f'{input_base}-shifted-book-duplex.ps')
+
+# Convert PDF file to PostScript
+run(['pdf2ps', args.input_file, ps_file])
 
 # Shift even pages by paper width — page width
 even_page_shift = page_width - input_page_width
-subprocess.check_call(['pstops', f'--inpaper={unit_to_str(page_width)}x{unit_to_str(page_height)}', f'2:0,1({unit_to_str(even_page_shift)},0mm)', f'{input_base}.ps', f'{input_base}-shifted.ps'])
+run(['pstops',
+     f'--inpaper={unit_to_str(page_width)}x{unit_to_str(page_height)}',
+     f'2:0,1({unit_to_str(even_page_shift)},0mm)',
+     ps_file,
+     shifted_ps_file,
+])
 
 # Reorder pages into signature orders
-subprocess.check_call(['psbook', f'-s{args.signature}', f'{input_base}-shifted.ps', f'{input_base}-shifted-book.ps'])
+run(['psbook',
+     f'-s{args.signature}',
+     shifted_ps_file,
+     shifted_ps_signatures_file,
+])
 
 # Put two pages on each sheet
-subprocess.check_call(['psnup', f'--paper={output_paper}', f'--inpaper={unit_to_str(page_width)}x{unit_to_str(page_height)}', '-2', f'{input_base}-shifted-book.ps', f'{input_base}-shifted-book-2up.ps'])
+run(['psnup',
+     f'--paper={output_paper}',
+     f'--inpaper={unit_to_str(page_width)}x{unit_to_str(page_height)}',
+     '-2',
+     shifted_ps_signatures_file,
+     shifted_ps_signatures_2up_file,
+])
 
 # Rotate every other page upside-down for long-edge duplex printing
 # Note: recto and verso pages look unaligned in PostScript (by about 0.5pt);
@@ -110,7 +141,19 @@ if args.short_edge:
     verso_rotation = '(0,0)'
 else:
     verso_rotation = 'U(1w,1h)'
-subprocess.check_call(['pstops', f'--paper={output_paper}', f'2:0({unit_to_str(verso_w_offset)},{unit_to_str(verso_h_offset)}),1{verso_rotation}', f'{input_base}-shifted-book-2up.ps', f'{input_base}-shifted-book-2up-duplex.ps'])
+run(['pstops',
+     f'--paper={output_paper}',
+     f'2:0({unit_to_str(verso_w_offset)},{unit_to_str(verso_h_offset)}),1{verso_rotation}',
+     shifted_ps_signatures_2up_file,
+     shifted_ps_signatures_duplex_file,
+])
 
 # Convert back to PDF
-subprocess.check_call(['ps2pdf', '-dAutoRotatePages=/None', f'{input_base}-shifted-book-2up-duplex.ps', args.output_file])
+run(['ps2pdf',
+     '-dAutoRotatePages=/None',
+     shifted_ps_signatures_duplex_file,
+     args.output_file
+])
+
+if not args.debug:
+    shutil.rmtree(tempdir)
