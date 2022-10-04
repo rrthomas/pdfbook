@@ -12,7 +12,7 @@ import tempfile
 import shutil
 
 # Set up units
-from units import unit, scaled_unit
+from units import unit, scaled_unit, quantity
 import units.predefined
 units.predefined.define_base_si_units()
 inch = scaled_unit('inch', 'cm', 2.54)
@@ -24,8 +24,9 @@ units = {
     'inch': inch,
 }
 
-def unit_to_str(u):
-    return f'{u.num}{u.unit}'
+def unit_to_compact_str(u):
+        return f'{u.num}{u.unit}'
+quantity.Quantity.__str__ = unit_to_compact_str
 
 # Command-line arguments
 default_paper = subprocess.check_output(['paper', '--no-size']).decode().strip()
@@ -112,8 +113,8 @@ run(['pdf2ps', args.input_file, ps_file])
 # Shift even pages by paper width — page width
 even_page_shift = page_width - input_page_width
 run(['pstops',
-     f'--inpaper={unit_to_str(page_width)}x{unit_to_str(page_height)}',
-     f'2:0,1({unit_to_str(even_page_shift)},0mm)',
+     f'--inpaper={page_width}x{page_height}',
+     f'2:0,1({even_page_shift},0mm)',
      ps_file,
      shifted_ps_file,
 ])
@@ -128,7 +129,7 @@ run(['psbook',
 # Put two pages on each sheet
 run(['psnup',
      f'--paper={output_paper}',
-     f'--inpaper={unit_to_str(page_width)}x{unit_to_str(page_height)}',
+     f'--inpaper={page_width}x{page_height}',
      '-2',
      shifted_ps_signatures_file,
      shifted_ps_signatures_2up_file,
@@ -143,7 +144,7 @@ else:
     verso_rotation = 'U(1w,1h)'
 run(['pstops',
      f'--paper={output_paper}',
-     f'2:0({unit_to_str(verso_w_offset)},{unit_to_str(verso_h_offset)}),1{verso_rotation}',
+     f'2:0({verso_w_offset},{verso_h_offset}),1{verso_rotation}',
      shifted_ps_signatures_2up_file,
      shifted_ps_signatures_duplex_file,
 ])
